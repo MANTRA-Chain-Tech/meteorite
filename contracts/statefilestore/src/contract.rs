@@ -7,7 +7,9 @@ use crate::msg::{ExecuteMsg, InstantiateMsg, StoreFileResponse};
 use crate::state::FILES;
 use data_encoding::BASE32;
 use sha2::{Digest, Sha256};
-use zstd::encode_all;
+use std::io::prelude::*;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 #[entry_point]
 pub fn instantiate(
@@ -42,9 +44,13 @@ pub fn execute_store_file(deps: DepsMut, data: Binary) -> StdResult<Response> {
     }
 
     // Compress the data
-    let compressed_data = encode_all(data.as_slice(), 3).map_err(|err| {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data.as_slice()).map_err(|err| {
         cosmwasm_std::StdError::generic_err(format!("Compression error: {}", err))
-    })?; // Compression level 3
+    })?;
+    let compressed_data = encoder.finish().map_err(|err| {
+        cosmwasm_std::StdError::generic_err(format!("Compression error: {}", err))
+    })?;
 
     // Compute SHA256 hash of the compressed data
     let mut hasher = Sha256::new();
