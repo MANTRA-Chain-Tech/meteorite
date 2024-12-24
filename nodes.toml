@@ -19,26 +19,24 @@ positions = 2                                       # Number of positions to use
 broadcast_mode = "grpc" # or "rpc"
 
 
-msg_type = "instantiate_contract"
+msg_type = "bank_send"
+[msg_params]
+# if this field is left blank as "", meteorite will send to random accounts endlessly
+to_address = ""
+amount = 1
 
-# [msg_params]
-
-# # if this field is left blank as "", meteorite will send to random accounts endlessly
-# to_address = ""
-# amount = 1
-
-
+# msg_type = "store_code"
 # [msg_params]
 # wasm_file = "artifacts/statefilestore.wasm"
 # label = "statefilestore"
 
-#msg_type = "instantiate_contract"
 
-[msg_params]
-code_id = 1
-label = "statefilestore"
-init_msg = '{}'
-amount = 1000
+# msg_type = "instantiate_contract"
+# [msg_params]
+# code_id = 1
+# label = "statefilestore"
+# init_msg = '{}'
+# amount = 1000
 
 [gas]
 low = 25
