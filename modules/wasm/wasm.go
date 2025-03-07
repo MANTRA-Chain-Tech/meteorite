@@ -105,6 +105,28 @@ func CreateExecuteContractMsg(config types.Config, sender string, msgParams type
 	return &msg, nil
 }
 
+func CreateExecuteContractMsgForCampaign(config types.Config, sender string, msgParams types.MsgParams, execMsg []byte) (sdk.Msg, error) {
+	senderAddr, err := sdk.AccAddressFromBech32(sender)
+	if err != nil {
+		return nil, fmt.Errorf("invalid sender address: %w", err)
+	}
+
+	contractAddress, err := sdk.AccAddressFromBech32(msgParams.ContractAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid contract address: %w", err)
+	}
+
+	funds := sdk.NewCoins()
+
+	msg := wasmtypes.MsgExecuteContract{
+		Sender:   senderAddr.String(),
+		Contract: contractAddress.String(),
+		Msg:      execMsg,
+		Funds:    funds,
+	}
+	return &msg, nil
+}
+
 // Helper function to create a StoreFile message
 func CreateStoreFileMsg(data []byte) ([]byte, error) {
 	msg := struct {

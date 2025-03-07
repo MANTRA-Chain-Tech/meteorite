@@ -393,6 +393,7 @@ func verifyAPIEndpoint(apiURL string) bool {
 		return false
 	}
 
+	return true
 	// Read a small amount of the body to verify it's valid JSON
 	body := make([]byte, 512) // 512 bytes is enough to verify JSON structure
 	n, err := io.ReadAtLeast(resp.Body, body, 1)

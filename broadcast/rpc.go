@@ -63,10 +63,12 @@ func SendTransactionViaRPC(
 			errorMsg = resp.Log
 			insufficientFeeErr = strings.Contains(errorMsg, "insufficient fee")
 		}
+		fmt.Println(errorMsg)
 
 		// Retry if we have an insufficient fee error and haven't exceeded retry limit
 		if insufficientFeeErr && retryCount < maxRetries {
 			// Try to extract the required fee
+			fmt.Println(errorMsg)
 			requiredAmount, requiredDenom, parseErr := lib.ExtractRequiredFee(errorMsg)
 			if parseErr == nil {
 				// For retry with higher fee, modify the config's gas strategy

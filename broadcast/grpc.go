@@ -65,6 +65,7 @@ func SendTransactionViaGRPC(
 			// Try to extract the required fee
 			requiredAmount, requiredDenom, parseErr := lib.ExtractRequiredFee(errorMsg)
 			if parseErr == nil {
+				fmt.Println(errorMsg)
 				// For retry with higher fee, modify the config's gas strategy
 				fmt.Printf("Fee adjustment: Retry with fee %d%s\n", requiredAmount, requiredDenom)
 

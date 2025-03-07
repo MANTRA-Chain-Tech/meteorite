@@ -62,5 +62,6 @@ func ConvertMsgParamsToMap(params MsgParams) map[string]interface{} {
 	result["exec_msg"] = params.ExecMsg
 	result["label"] = params.Label
 	result["msg_type"] = params.MsgType
+	result["arbitrary"] = params.Arbitrary
 	return result
 }

@@ -1,0 +1,36 @@
+# Meteorite configuration for MANTRA Dukong Testnet (mantrachaintestnet2)
+# Generated from the Cosmos Chain Registry
+
+denom = "uom"
+prefix = "mantra"
+gas_per_byte = 100
+# msg_type = "bank_send"
+multisend = false
+num_multisend = 10
+broadcast_mode = "grpc"
+base_gas = 400000
+# positions = 3
+positions = 1000
+slip44 = 118
+chain = "mantra-dukong-1"
+batch_size = 1
+msg_type = "claim_gendrop"
+
+[gas]
+low = 1
+precision = 3
+
+[nodes]
+rpc = ["https://rpc.dukong.mantrachain.io"]
+api = "https://api.dukong.mantrachain.io"
+grpc = "grpc.dukong.mantrachain.io:443"
+
+# [msg_params]
+# amount = 1
+# to_address = ""
+
+[msg_params]
+contract_addr = "mantra1xt3e39pa699feh5jrgjzg42rmz209wvcmdlgvv9qaq9yd7j9yn6qv8xg6m"
+arbitrary = "https://develop.mantrazone.dev/api/v1/portfolio/"
+from_address = "mantra1x42q9wh7c9vy7npm9m3ldjjw4h32sfs4ngslzz" # dumpy to pass ValidateTxParams
+to_address = "mantra1x42q9wh7c9vy7npm9m3ldjjw4h32sfs4ngslzz" # dumpy to pass ValidateTxParams

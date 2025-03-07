@@ -85,10 +85,10 @@ func runConfigFileMode(flags Flags) {
 	// Print account information
 	printAccountInformation(accounts, config)
 
-	// Check and adjust balances if needed
-	if err := checkAndAdjustBalances(accounts, config); err != nil {
-		log.Fatalf("Failed to handle balance adjustment: %v", err)
-	}
+	// // Check and adjust balances if needed
+	// if err := checkAndAdjustBalances(accounts, config); err != nil {
+	// 	log.Fatalf("Failed to handle balance adjustment: %v", err)
+	// }
 
 	// Get chain ID
 	nodeURL := config.Nodes.RPC[0] // Use the first node
@@ -150,7 +150,7 @@ func setupEnvironment(configFile string) (types.Config, []types.Account) {
 // generateAccounts generates accounts based on the configuration
 func generateAccounts(config types.Config, mnemonic []byte) []types.Account {
 	positions := config.Positions
-	const MaxPositions = 100 // Adjust based on requirements
+	const MaxPositions = 1000 // Adjust based on requirements
 	if positions <= 0 || positions > MaxPositions {
 		log.Fatalf("Number of positions must be between 1 and %d, got: %d", MaxPositions, positions)
 	}
@@ -195,6 +195,31 @@ func printAccountInformation(accounts []types.Account, config types.Config) {
 		}
 		fmt.Printf("Position %d: Address: %s, Balance: %s %s\n", acct.Position, acct.Address, balance.String(), config.Denom)
 	}
+
+	// save address and balance csv
+	saveAddressBalanceCSV(accounts, config)
+}
+
+func saveAddressBalanceCSV(accounts []types.Account, config types.Config) {
+	file, err := os.Create("address_balance.csv")
+	if err != nil {
+		log.Fatalf("Failed to create file: %v", err)
+	}
+	defer file.Close()
+
+	_, err = file.WriteString("address,amount\n")
+	if err != nil {
+		log.Fatalf("Failed to write to file: %v", err)
+	}
+
+	for _, acct := range accounts {
+		_, err = file.WriteString(fmt.Sprintf("%s,%f\n", acct.Address, 0.010000))
+		if err != nil {
+			log.Fatalf("Failed to write to file: %v", err)
+		}
+	}
+
+	fmt.Println("Saved address and balance CSV to address_balance.csv")
 }
 
 // checkAndAdjustBalances checks if balances are within the threshold and adjusts them if needed
@@ -300,7 +325,13 @@ func processAccount(
 	}
 
 	// Broadcast transactions
-	successfulTxs, failedTxs, responseCodes, _ := broadcast.Loop(txParams, BatchSize, int(acct.Position))
+	var batchSize int
+	if config.BatchSize > 0 {
+		batchSize = int(config.BatchSize)
+	} else {
+		batchSize = BatchSize
+	}
+	successfulTxs, failedTxs, responseCodes, _ := broadcast.Loop(txParams, batchSize, int(acct.Position))
 
 	// Print results
 	printResults(acct.Address, successfulTxs, failedTxs, responseCodes)
@@ -519,6 +550,7 @@ func TransferFunds(sender types.Account, receiverAddress string, amount sdkmath.
 		Config:      config,
 		NodeURL:     config.Nodes.RPC[0],
 		ChainID:     config.Chain,
+		AccNum:      uint64(sender.Position),
 		PrivKey:     sender.PrivKey,
 		PubKey:      sender.PubKey,
 		AcctAddress: sender.Address,
@@ -611,7 +643,7 @@ func shouldProceedWithBalances(balances map[string]sdkmath.Int) bool {
 		return true
 	}
 
-	var maxBalance sdkmath.Int
+	maxBalance := sdkmath.ZeroInt()
 	for _, balance := range balances {
 		if balance.GT(maxBalance) {
 			maxBalance = balance

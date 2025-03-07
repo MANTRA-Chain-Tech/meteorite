@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +23,8 @@ import (
 	signing "github.com/cosmos/cosmos-sdk/types/tx/signing"
 	xauthsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+
+	wasm "github.com/somatic-labs/meteorite/modules/wasm"
 )
 
 const (
@@ -158,6 +162,122 @@ func createInstantiateContractMsg(txParams *types.TxParams) (sdk.Msg, error) {
 func createExecuteContractMsg(txParams *types.TxParams) (sdk.Msg, error) {
 	// Just a stub for now
 	return nil, errors.New("execute_contract not implemented")
+}
+
+type claim struct {
+	Proof                []string `json:"proof"`                  // Changed from "proof"
+	Receiver             string   `json:"receiver"`               // Changed from "receiver"
+	TotalClaimableAmount string   `json:"total_claimable_amount"` // Changed from "total_claimable_amount"
+}
+
+type campaignWasmMsg struct {
+	Claim claim `json:"claim"` // Changed from "claim"
+}
+
+// LeaderboardResponse captures the structure of the leaderboard service response
+type LeaderboardResponse struct {
+	Campaigns []Campaign `json:"campaigns"`
+}
+
+// Campaign represents a campaign in the leaderboard response
+type Campaign struct {
+	ClaimerAddress  string   `json:"claimerAddress"`
+	ClaimAmount     string   `json:"claimAmount"`
+	CampaignAddress string   `json:"campaignAddress"`
+	MerkleProof     []string `json:"merkleProof"`
+}
+
+// claimGendropMsg creates a claim gendrop message
+func claimGenDropMsg(txParams *types.TxParams) (sdk.Msg, error) {
+	// Extract required parameters
+	campaignAddr, ok := txParams.MsgParams["contract_addr"].(string)
+	if !ok || campaignAddr == "" {
+		return nil, errors.New("contract_addr is required for claim_gendrop")
+	}
+	leaderboardUrl, ok := txParams.MsgParams["arbitrary"].(string)
+	if !ok || leaderboardUrl == "" {
+		return nil, errors.New("arbitrary is required for claim_gendrop")
+	}
+
+	// Get signing address
+	privKey := txParams.PrivKey
+	pubKey := privKey.PubKey()
+	addressBytes := sdk.AccAddress(pubKey.Address().Bytes())
+	address, err := sdk.Bech32ifyAddressBytes(txParams.Config.Prefix, addressBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive bech32 address: %w", err)
+	}
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Make HTTP GET request
+	resp, err := client.Get(fmt.Sprintf("%s%s", leaderboardUrl, address))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch from leaderboard service: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read leaderboard response: %w", err)
+	}
+
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("leaderboard service returned error status: %d, body: %s",
+			resp.StatusCode, string(body))
+	}
+
+	// Parse JSON response
+	var leaderboardResp LeaderboardResponse
+	if err := json.Unmarshal(body, &leaderboardResp); err != nil {
+		return nil, fmt.Errorf("failed to parse leaderboard response: %w", err)
+	}
+
+	// Find matching campaign
+	var targetCampaign *Campaign
+	for i := range leaderboardResp.Campaigns {
+		if leaderboardResp.Campaigns[i].CampaignAddress == campaignAddr {
+			targetCampaign = &leaderboardResp.Campaigns[i]
+			break
+		}
+	}
+
+	if targetCampaign == nil {
+		return nil, fmt.Errorf("no campaign found with address %s", campaignAddr)
+	}
+
+	// Verify claimer address matches
+	if address != targetCampaign.ClaimerAddress {
+		return nil, fmt.Errorf("signer address %s does not match claimer address %s",
+			address, targetCampaign.ClaimerAddress)
+	}
+
+	// Create execute message
+	execMsg := campaignWasmMsg{
+		Claim: claim{
+			Proof:                targetCampaign.MerkleProof,
+			Receiver:             address,
+			TotalClaimableAmount: targetCampaign.ClaimAmount,
+		},
+	}
+
+	// marshal the message to []byte
+	execMsgBytes, err := json.Marshal(execMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal execMsg: %w", err)
+	}
+
+	msg, err := wasm.CreateExecuteContractMsgForCampaign(txParams.Config, address, txParams.Config.MsgParams, execMsgBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create execute contract message: %w", err)
+	}
+
+	return msg, nil
 }
 
 // BuildTransaction builds a transaction from the provided parameters
@@ -427,6 +547,9 @@ func createMessage(txParams *types.TxParams) (sdk.Msg, error) {
 	case "execute_contract":
 		// Create an execute contract message for CosmWasm
 		return createExecuteContractMsg(txParams)
+	case "claim_gendrop":
+		// Create a claim gendrop message
+		return claimGenDropMsg(txParams)
 	default:
 		return nil, fmt.Errorf("unsupported message type: %s", txParams.MsgType)
 	}
@@ -530,7 +653,7 @@ func getMsgTypeFromMsg(msg sdk.Msg) string {
 // Add this new type to track node-specific settings
 type NodeSettings struct {
 	MinimumFees    map[string]uint64 // denom -> amount
-	LastSequence   uint64
+	LastSequence   map[string]uint64 // addr -> sequence
 	LastUpdateTime time.Time
 	mutex          sync.RWMutex
 }
@@ -551,7 +674,8 @@ func getNodeSettings(nodeURL string) *NodeSettings {
 	}
 
 	settings := &NodeSettings{
-		MinimumFees: make(map[string]uint64),
+		MinimumFees:  make(map[string]uint64),
+		LastSequence: make(map[string]uint64),
 	}
 	nodeSettingsMap[nodeURL] = settings
 	return settings
@@ -568,19 +692,19 @@ func updateMinimumFee(nodeURL, denom string, amount uint64) {
 }
 
 // Add this function to update sequence for a node
-func updateSequence(nodeURL string, sequence uint64) {
+func updateSequence(nodeURL string, addr string, sequence uint64) {
 	settings := getNodeSettings(nodeURL)
 	settings.mutex.Lock()
 	defer settings.mutex.Unlock()
 
-	settings.LastSequence = sequence
+	settings.LastSequence[addr] = sequence
 	settings.LastUpdateTime = time.Now()
 }
 
 // calculateInitialFee calculates the initial fee amount based on gas limit and price
-func calculateInitialFee(gasLimit uint64, gasPrice int64) int64 {
+func calculateInitialFee(gasLimit uint64, gasPrice float64) int64 {
 	// Scale to make fees reasonable
-	feeAmount := int64(gasLimit) * gasPrice / 10000
+	feeAmount := int64(float64(gasLimit) * gasPrice)
 
 	// Ensure minimum fee for non-zero gas price
 	if feeAmount < 1 && gasPrice > 0 {
@@ -600,11 +724,11 @@ func BuildAndSignTransaction(
 	// First, check if we have more up-to-date sequence info for this node from previous errors
 	nodeSettings := getNodeSettings(txParams.NodeURL)
 	nodeSettings.mutex.RLock()
-	if nodeSettings.LastSequence > sequence {
+	if cachedSeq, exists := nodeSettings.LastSequence[txParams.AcctAddress]; exists && cachedSeq > sequence {
 		// Log that we're using the cached sequence from previous error responses
-		fmt.Printf("Using cached sequence %d instead of provided %d for node %s (from previous tx errors)\n",
-			nodeSettings.LastSequence, sequence, txParams.NodeURL)
-		sequence = nodeSettings.LastSequence
+		fmt.Printf("Using cached sequence %d of accNum %d instead of provided %d for node %s (from previous tx errors)\n",
+			cachedSeq, txParams.AccNum, sequence, txParams.NodeURL)
+		sequence = cachedSeq
 	}
 	nodeSettings.mutex.RUnlock()
 
@@ -682,7 +806,8 @@ func BuildAndSignTransaction(
 	}
 
 	// Calculate initial fee amount
-	feeAmount := calculateInitialFee(gasLimit, gasPrice)
+	feeAmount := calculateInitialFee(gasLimit, 0.01)
+	fmt.Println("Initial fee amount:", feeAmount)
 
 	// Important: Check if we have a stored minimum fee for this node and use it if higher
 	nodeSettings.mutex.RLock()
@@ -732,11 +857,10 @@ func BuildAndSignTransaction(
 
 	// Get account number - this is still needed, but we won't use its sequence
 	accNum := txParams.AccNum
-	fromAddress, _ := txParams.MsgParams["from_address"].(string)
 
 	// We only need account number from GetAccountInfo, NOT the sequence
 	// The sequence we use should be from our tracking system, which considers mempool state
-	fetchedAccNum, stateSequence, err := GetAccountInfo(ctx, clientCtx, fromAddress)
+	fetchedAccNum, stateSequence, err := GetAccountInfo(ctx, clientCtx, txParams.AcctAddress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account info: %w", err)
 	}
@@ -753,7 +877,7 @@ func BuildAndSignTransaction(
 	if sequence == 0 {
 		sequence = stateSequence
 		fmt.Printf("First transaction to node %s, using state sequence: %d\n", txParams.NodeURL, sequence)
-		updateSequence(txParams.NodeURL, sequence)
+		updateSequence(txParams.NodeURL, txParams.AcctAddress, sequence)
 	}
 
 	// Set up signature
@@ -802,7 +926,7 @@ func BuildAndSignTransaction(
 
 	// If successful, update our node sequence cache preemptively
 	// This helps avoid sequence errors on subsequent transactions to the same node
-	updateSequence(txParams.NodeURL, sequence+1)
+	updateSequence(txParams.NodeURL, txParams.AcctAddress, sequence+1)
 
 	return txBytes, nil
 }
@@ -837,7 +961,7 @@ func applyNodeFeeBuffer(nodeURL, denom string, baseFee int64) int64 {
 
 // ProcessBroadcastResponse processes the response from a transaction broadcast
 // and updates node-specific settings based on errors
-func ProcessBroadcastResponse(nodeURL, denom string, sequence uint64, respBytes []byte) {
+func ProcessBroadcastResponse(nodeURL, denom string, addr string, sequence uint64, respBytes []byte) {
 	// Check if there's an error response to parse
 	if len(respBytes) == 0 {
 		return
@@ -853,7 +977,7 @@ func ProcessBroadcastResponse(nodeURL, denom string, sequence uint64, respBytes 
 		correctSeq, _ := strconv.ParseUint(matches[1], 10, 64)
 
 		// Update our sequence tracking with the correct mempool sequence
-		updateSequence(nodeURL, correctSeq)
+		updateSequence(nodeURL, addr, correctSeq)
 		fmt.Printf("MEMPOOL SYNC - Updated sequence for %s: %d (was: %d)\n",
 			nodeURL, correctSeq, sequence)
 
@@ -889,7 +1013,7 @@ func ProcessBroadcastResponse(nodeURL, denom string, sequence uint64, respBytes 
 }
 
 // BroadcastTxSync is a wrapper around the standard broadcast that includes error processing
-func BroadcastTxSync(ctx context.Context, clientCtx sdkclient.Context, txBytes []byte, nodeURL, denom string, sequence uint64) (*sdk.TxResponse, error) {
+func BroadcastTxSync(ctx context.Context, clientCtx sdkclient.Context, txBytes []byte, nodeURL, denom string, addr string, sequence uint64) (*sdk.TxResponse, error) {
 	resp, err := clientCtx.BroadcastTxSync(txBytes)
 
 	// Process broadcast response for errors to update our node-specific tracking
@@ -897,32 +1021,32 @@ func BroadcastTxSync(ctx context.Context, clientCtx sdkclient.Context, txBytes [
 	if resp != nil {
 		// Marshal response to bytes for processing
 		respBytes, _ := json.Marshal(resp)
-		ProcessBroadcastResponse(nodeURL, denom, sequence, respBytes)
+		ProcessBroadcastResponse(nodeURL, denom, addr, sequence, respBytes)
 	} else if err != nil {
 		// If we have an error but no response, process the error string
-		ProcessBroadcastResponse(nodeURL, denom, sequence, []byte(err.Error()))
+		ProcessBroadcastResponse(nodeURL, denom, addr, sequence, []byte(err.Error()))
 	}
 
 	return resp, err
 }
 
 // BroadcastTxAsync is a wrapper around the standard broadcast that includes error processing
-func BroadcastTxAsync(ctx context.Context, clientCtx sdkclient.Context, txBytes []byte, nodeURL, denom string, sequence uint64) (*sdk.TxResponse, error) {
+func BroadcastTxAsync(ctx context.Context, clientCtx sdkclient.Context, txBytes []byte, nodeURL, denom string, addr string, sequence uint64) (*sdk.TxResponse, error) {
 	resp, err := clientCtx.BroadcastTxAsync(txBytes)
 
 	// Process broadcast response for errors to update our node-specific tracking
 	if resp != nil {
 		respBytes, _ := json.Marshal(resp)
-		ProcessBroadcastResponse(nodeURL, denom, sequence, respBytes)
+		ProcessBroadcastResponse(nodeURL, denom, addr, sequence, respBytes)
 	} else if err != nil {
-		ProcessBroadcastResponse(nodeURL, denom, sequence, []byte(err.Error()))
+		ProcessBroadcastResponse(nodeURL, denom, addr, sequence, []byte(err.Error()))
 	}
 
 	return resp, err
 }
 
 // BroadcastTxBlock is a wrapper around block/commit broadcast that includes error processing
-func BroadcastTxBlock(ctx context.Context, clientCtx sdkclient.Context, txBytes []byte, nodeURL, denom string, sequence uint64) (*sdk.TxResponse, error) {
+func BroadcastTxBlock(ctx context.Context, clientCtx sdkclient.Context, txBytes []byte, nodeURL, denom string, addr string, sequence uint64) (*sdk.TxResponse, error) {
 	// In newer versions of the SDK, BroadcastTxCommit is not directly available on clientCtx
 	// Instead, we use the general BroadcastTx method with the appropriate mode
 	resp, err := clientCtx.BroadcastTx(txBytes)
@@ -930,9 +1054,9 @@ func BroadcastTxBlock(ctx context.Context, clientCtx sdkclient.Context, txBytes 
 	// Process broadcast response for errors to update our node-specific tracking
 	if resp != nil {
 		respBytes, _ := json.Marshal(resp)
-		ProcessBroadcastResponse(nodeURL, denom, sequence, respBytes)
+		ProcessBroadcastResponse(nodeURL, denom, addr, sequence, respBytes)
 	} else if err != nil {
-		ProcessBroadcastResponse(nodeURL, denom, sequence, []byte(err.Error()))
+		ProcessBroadcastResponse(nodeURL, denom, addr, sequence, []byte(err.Error()))
 	}
 
 	return resp, err
@@ -953,31 +1077,31 @@ func BroadcastTx(
 	// Use our custom wrappers that include error tracking
 	switch broadcast {
 	case "sync":
-		resp, err = BroadcastTxSync(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, sequence)
+		resp, err = BroadcastTxSync(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, txParams.AcctAddress, sequence)
 	case "async":
-		resp, err = BroadcastTxAsync(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, sequence)
+		resp, err = BroadcastTxAsync(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, txParams.AcctAddress, sequence)
 	case "block":
 		// For commit/block mode, use our wrapper
-		resp, err = BroadcastTxBlock(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, sequence)
+		resp, err = BroadcastTxBlock(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, txParams.AcctAddress, sequence)
 	default:
 		// Default to sync mode
-		resp, err = BroadcastTxSync(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, sequence)
+		resp, err = BroadcastTxSync(ctx, clientCtx, txBytes, txParams.NodeURL, txParams.Config.Denom, txParams.AcctAddress, sequence)
 	}
 
 	// Further process the response regardless of error status
-	ProcessTxBroadcastResult(resp, err, txParams.NodeURL, sequence)
+	ProcessTxBroadcastResult(resp, err, txParams.NodeURL, txParams.AcctAddress, sequence)
 
 	return resp, err
 }
 
 // ProcessTxBroadcastResult processes a transaction broadcast result and returns a custom response
-func ProcessTxBroadcastResult(txResponse *sdk.TxResponse, err error, nodeURL string, sequence uint64) {
+func ProcessTxBroadcastResult(txResponse *sdk.TxResponse, err error, nodeURL string, addr string, sequence uint64) {
 	// Check if we have a response code indicating error
 	if txResponse != nil && txResponse.Code != 0 {
 		// Process the error log to update our node tracking
 		if txResponse.RawLog != "" {
 			// Handle specific error cases
-			ProcessBroadcastResponse(nodeURL, "", sequence, []byte(txResponse.RawLog))
+			ProcessBroadcastResponse(nodeURL, "", addr, sequence, []byte(txResponse.RawLog))
 		}
 	}
 }
@@ -1020,8 +1144,8 @@ func SendTx(
 				// If we couldn't extract sequence from error, use our cached sequence
 				nodeSettings := getNodeSettings(txParams.NodeURL)
 				nodeSettings.mutex.RLock()
-				if nodeSettings.LastSequence > sequence {
-					correctSeq = nodeSettings.LastSequence
+				if nodeSettings.LastSequence[txParams.AcctAddress] > sequence {
+					correctSeq = nodeSettings.LastSequence[txParams.AcctAddress]
 				}
 				nodeSettings.mutex.RUnlock()
 			}

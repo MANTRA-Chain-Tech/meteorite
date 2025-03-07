@@ -1,6 +1,8 @@
 package types
 
-import cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+import (
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+)
 
 type Header struct {
 	Height string `json:"height"`
@@ -118,6 +120,7 @@ type Fee struct {
 
 type Config struct {
 	Bytes          int64       `toml:"bytes"`
+	BatchSize      int64       `toml:"batch_size"`
 	Chain          string      `toml:"chain"`
 	Channel        string      `toml:"channel"`
 	Denom          string      `toml:"denom"`
@@ -157,6 +160,7 @@ type MsgParams struct {
 	ExecMsg      string `toml:"exec_msg"`
 	Label        string `toml:"label"`
 	MsgType      string `toml:"msg_type"`
+	Arbitrary    string `toml:"arbitrary"` // Arbitrary data for custom message types
 
 	// Gas scaling parameters for different message types
 	GasScalingFactors map[string]float64

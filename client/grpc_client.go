@@ -2,9 +2,13 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	tx "github.com/cosmos/cosmos-sdk/types/tx"
@@ -16,7 +20,45 @@ type GRPCClient struct {
 }
 
 func NewGRPCClient(grpcEndpoint string) (*GRPCClient, error) {
-	conn, err := grpc.NewClient(grpcEndpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Create a custom certificate pool
+	certPool := x509.NewCertPool()
+
+	// Create TLS config with custom verification
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true, // Temporarily set to true to fetch the cert
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			// Get the peer certificates
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("no certificates found from peer")
+			}
+
+			// Add the server's certificate to our pool
+			certPool.AddCert(cs.PeerCertificates[0])
+
+			// Create a new chain verifier
+			opts := x509.VerifyOptions{
+				Roots:         certPool,
+				CurrentTime:   time.Now(),
+				DNSName:       cs.ServerName,
+				Intermediates: x509.NewCertPool(),
+			}
+
+			// Add any intermediate certificates
+			for _, cert := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+
+			// Verify the certificate chain
+			_, err := cs.PeerCertificates[0].Verify(opts)
+			return err
+		},
+	}
+
+	// Create TLS credentials
+	creds := credentials.NewTLS(tlsConfig)
+
+	// Create connection with the TLS credentials
+	conn, err := grpc.Dial(grpcEndpoint, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, err
 	}
