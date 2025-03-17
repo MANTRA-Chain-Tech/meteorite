@@ -438,7 +438,11 @@ func adjustBalances(accounts []types.Account, balances map[string]sdkmath.Int, c
 	fmt.Printf("Number of Accounts: %d, Average Balance per account: %s %s\n", numAccounts.Int64(), averageBalance.String(), config.Denom)
 
 	// Define minimum transfer amount to avoid dust transfers
-	minTransfer := sdkmath.NewInt(1000000) // Adjust based on your token's decimal places
+	adjustBalancesMinTransfer := int64(1000000) // default value
+	if config.AdjustBalancesMinTransfer > 0 {
+		adjustBalancesMinTransfer = config.AdjustBalancesMinTransfer
+	}
+	minTransfer := sdkmath.NewInt(adjustBalancesMinTransfer) // Adjust based on your token's decimal places
 	fmt.Printf("Minimum Transfer Amount to avoid dust: %s %s\n", minTransfer.String(), config.Denom)
 
 	// Create a slice to track balances that need to send or receive funds
