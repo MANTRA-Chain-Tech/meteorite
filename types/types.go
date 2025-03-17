@@ -144,7 +144,8 @@ type Config struct {
 	Nodes          NodesConfig `toml:"nodes"`
 	BroadcastMode  string      `toml:"broadcast_mode"`
 	Positions      uint        `toml:"positions"`
-	FromAddress    string      `toml:"from_address"` // Default sender address
+	FromAddress    string      `toml:"from_address"`    // Default sender address
+	AdjustBalances bool        `toml:"adjust_balances"` // Whether to adjust balances for gas fees
 }
 
 type MsgParams struct {

@@ -85,10 +85,12 @@ func runConfigFileMode(flags Flags) {
 	// Print account information
 	printAccountInformation(accounts, config)
 
-	// // Check and adjust balances if needed
-	// if err := checkAndAdjustBalances(accounts, config); err != nil {
-	// 	log.Fatalf("Failed to handle balance adjustment: %v", err)
-	// }
+	// Check and adjust balances if needed
+	if config.AdjustBalances {
+		if err := checkAndAdjustBalances(accounts, config); err != nil {
+			log.Fatalf("Failed to handle balance adjustment: %v", err)
+		}
+	}
 
 	// Get chain ID
 	nodeURL := config.Nodes.RPC[0] // Use the first node
@@ -150,7 +152,7 @@ func setupEnvironment(configFile string) (types.Config, []types.Account) {
 // generateAccounts generates accounts based on the configuration
 func generateAccounts(config types.Config, mnemonic []byte) []types.Account {
 	positions := config.Positions
-	const MaxPositions = 1000 // Adjust based on requirements
+	const MaxPositions = 10000 // Adjust based on requirements
 	if positions <= 0 || positions > MaxPositions {
 		log.Fatalf("Number of positions must be between 1 and %d, got: %d", MaxPositions, positions)
 	}

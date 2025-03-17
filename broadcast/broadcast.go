@@ -85,7 +85,14 @@ func Loop(
 	// Log the start of broadcasting for this position
 	LogVisualizerDebug(fmt.Sprintf("Starting broadcasts for position %d (batchSize: %d)", position, batchSize))
 
+	// Allow retry when batch size is 1
+	maxRetries := 1
+Batch:
 	for i := 0; i < batchSize; i++ {
+		if batchSize == 1 {
+			maxRetries = 5
+		}
+		retryCount := 0
 		currentSequence := sequence
 		metrics := &TimingMetrics{
 			PrepStart: time.Now(),
@@ -94,32 +101,42 @@ func Loop(
 
 		metrics.SignStart = time.Now()
 		metrics.BroadStart = time.Now()
-		resp, _, err := SendTransactionViaRPC(context.Background(), txParams, currentSequence)
-		metrics.Complete = time.Now()
+		var txLatency time.Duration
+		var resp *coretypes.ResultBroadcastTx
+	Retry:
+		for retryCount < maxRetries {
+			resp, _, err := SendTransactionViaRPC(context.Background(), txParams, currentSequence)
+			metrics.Complete = time.Now()
 
-		// Calculate total transaction time for visualization
-		txLatency := metrics.Complete.Sub(metrics.PrepStart)
+			// Calculate total transaction time for visualization
+			txLatency := metrics.Complete.Sub(metrics.PrepStart)
 
-		if err != nil {
-			metrics.LogTiming(currentSequence, false, err)
-			failedTxs++
+			if err != nil {
+				metrics.LogTiming(currentSequence, false, err)
+				failedTxs++
 
-			// Update visualizer with failed tx
-			UpdateVisualizerStats(0, 1, txLatency)
+				// Update visualizer with failed tx
+				UpdateVisualizerStats(0, 1, txLatency)
 
-			if resp != nil && resp.Code == 32 {
-				newSeq, success, newResp := handleSequenceMismatch(txParams, position, sequence, err)
-				sequence = newSeq
-				if success {
-					successfulTxs++
-					responseCodes[newResp.Code]++
+				if resp != nil && resp.Code == 32 {
+					newSeq, success, newResp := handleSequenceMismatch(txParams, position, sequence, err)
+					sequence = newSeq
+					if success {
+						successfulTxs++
+						responseCodes[newResp.Code]++
 
-					// Update visualizer with successful tx after sequence recovery
-					UpdateVisualizerStats(1, 0, metrics.Complete.Sub(metrics.PrepStart))
+						// Update visualizer with successful tx after sequence recovery
+						UpdateVisualizerStats(1, 0, metrics.Complete.Sub(metrics.PrepStart))
+						continue Batch
+					}
 				}
-				continue
+				fmt.Printf("[POS-%d] Failed to broadcast transaction: %v Retry: %d\n", position, err, retryCount)
+				// add some delay before retrying
+				retryCount++
+				time.Sleep(time.Duration(500*retryCount) * time.Millisecond)
+				continue Retry
 			}
-			continue
+			continue Batch
 		}
 
 		metrics.LogTiming(currentSequence, true, nil)

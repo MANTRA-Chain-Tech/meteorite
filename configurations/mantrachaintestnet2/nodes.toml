@@ -15,7 +15,7 @@ slip44 = 118
 chain = "mantra-dukong-1"
 batch_size = 1
 msg_type = "claim_gendrop"
-
+adjust_balances = false
 [gas]
 low = 1
 precision = 3
