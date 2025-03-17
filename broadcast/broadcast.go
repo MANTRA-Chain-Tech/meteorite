@@ -102,14 +102,13 @@ Batch:
 		metrics.SignStart = time.Now()
 		metrics.BroadStart = time.Now()
 		var txLatency time.Duration
-		var resp *coretypes.ResultBroadcastTx
 	Retry:
 		for retryCount < maxRetries {
 			resp, _, err := SendTransactionViaRPC(context.Background(), txParams, currentSequence)
 			metrics.Complete = time.Now()
 
 			// Calculate total transaction time for visualization
-			txLatency := metrics.Complete.Sub(metrics.PrepStart)
+			txLatency = metrics.Complete.Sub(metrics.PrepStart)
 
 			if err != nil {
 				metrics.LogTiming(currentSequence, false, err)
@@ -131,21 +130,23 @@ Batch:
 					}
 				}
 				fmt.Printf("[POS-%d] Failed to broadcast transaction: %v Retry: %d\n", position, err, retryCount)
-				// add some delay before retrying
 				retryCount++
 				time.Sleep(time.Duration(500*retryCount) * time.Millisecond)
 				continue Retry
 			}
+
+			// Successfully got a response
+			metrics.LogTiming(currentSequence, true, nil)
+			successfulTxs++
+			if resp != nil {
+				responseCodes[resp.Code]++
+			}
+			sequence++
+
+			// Update visualizer with successful tx
+			UpdateVisualizerStats(1, 0, txLatency)
 			continue Batch
 		}
-
-		metrics.LogTiming(currentSequence, true, nil)
-		successfulTxs++
-		responseCodes[resp.Code]++
-		sequence++
-
-		// Update visualizer with successful tx
-		UpdateVisualizerStats(1, 0, txLatency)
 	}
 
 	// Log the completion of broadcasting for this position
